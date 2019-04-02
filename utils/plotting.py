@@ -17,13 +17,13 @@ def combine_epochs(train_result, key):
     return reduce(op.add, data)  
 
 
-def simple_smooth(data, factor: int = 5):
+def simple_smooth(data, factor: int = 5, simplify = 1):
     smoother = []
 
-    for i in range(factor, len(data) - factor):
+    for i in range(factor, len(data) - factor, simplify):
         smoother.append(sum(data[i - factor:i + factor]) / (factor * 2))
 
-    return smoother, np.linspace(factor, len(data) - factor - 1, len(data) - factor * 2)
+    return smoother, np.linspace(factor, len(data) - factor - 1, len(smoother))
 
 
 def plot_fn(f, xmin, xmax, samples=50, name=None, use_torch: bool = False):
