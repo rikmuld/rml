@@ -12,7 +12,7 @@ def accuracy_binary(preds, target, cutoff: float = 0.5) -> float:
     preds = torch.tensor(preds.view(-1))
     preds[preds >= cutoff] = 1
     preds[preds < cutoff] = 0
-    result = preds.long() == target
+    result = preds.long() == target.long()
         
     return result.sum().item() / target.size(0)
 
@@ -45,7 +45,3 @@ def precission_recall(preds: torch.FloatTensor, target: torch.LongTensor, cutoff
         "fp": false_pos / len(preds),
         "fn": false_neg / len(preds),
     }
-
-
-def confusion_matrix(preds: torch.FloatTensor, target: torch.LongTensor):
-    pass

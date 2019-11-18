@@ -1,6 +1,7 @@
 import torch
 
 import numpy as np
+import torch.utils.data
 
 from typing import List
 from torch.utils.data import DataLoader

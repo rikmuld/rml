@@ -1,10 +1,17 @@
 import torch
 import math
 
+from dataclasses import dataclass
+
 from .utils import prediction, utils
 from typing import Callable, Any, Dict, Tuple
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+try:
+    from apex import amp
+except:
+    amp = None
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -19,7 +26,7 @@ MetricCall = Callable[[torch.FloatTensor, Any], Any]
 LossCall = Callable[[torch.FloatTensor, Any], torch.FloatTensor]
 
 
-def basic_step(model: torch.nn.Module, data: Tuple[torch.FloatTensor, Any], loss: LossCall, feed_target: bool = False):
+def basic_step(model: torch.nn.Module, data: Tuple[torch.FloatTensor, Any], loss: LossCall, feed_target: bool = False, data_log = {}):
     input, target = data
 
     input = input.to(device)
@@ -31,11 +38,53 @@ def basic_step(model: torch.nn.Module, data: Tuple[torch.FloatTensor, Any], loss
     return cost, input, target, pred
 
 
-def training_step(cost: torch.FloatTensor, optimizer: torch.optim.Optimizer):
+def training_step(cost: torch.FloatTensor, optimizer: torch.optim.Optimizer, fp16: bool = False):
     optimizer.zero_grad()
-    cost.backward()
+
+    if fp16:
+        with amp.scale_loss(cost, optimizer) as scaled_loss:
+            scaled_loss.backward()
+    else:
+        cost.backward()
+    
     optimizer.step()
 
+
+@dataclass
+class OptimParams:
+    epochs: int
+    model: torch.nn.Module
+    optimizer: torch.optim.Optimizer
+    loss: LossCall
+    dl_train: DataLoader
+    dl_valid: DataLoader = None
+    metric: MetricCall = None
+    ittr_limit: int = None
+    lr_scheduler = None
+    feed_target: bool = False
+    batch_dim: int = 0
+    bare_train_feedback: bool = False
+    print_result: bool = False
+    epoch_save_path: str = None
+    direct_use_dl: bool = False
+    fp_16: bool = False
+    data_log_dict = {}
+
+def optimize_with_params(params: OptimParams, basic_stepper = basic_step, training_stepper = training_step, step_callback = None, epoch_callback = None):
+    if params.bare_train_feedback:
+        return optimize_bare(
+            params.epochs, params.model, params.optimizer, params.loss,
+            params.dl_train, params.feed_target, basic_stepper, 
+            training_stepper, params.lr_scheduler, params.ittr_limit, 
+            params.data_log_dict, params.direct_use_dl, params.fp16)
+
+    else:
+        return optimize(
+            params.epochs, params.model, params.optimizer, params.loss,
+            params.train_dl, params.valid_dl, params.metric, params.feed_target,
+            epoch_callback, step_callback, params.print_result,
+            params.batch_dim, training_stepper, params.ittr_limit, params.lr_scheduler,
+            params.epoch_save_path, basic_stepper, params.fp16)
 
 def optimize_bare(epochs: int,
                   model: torch.nn.Module,
@@ -45,22 +94,35 @@ def optimize_bare(epochs: int,
                   feed_target: bool = False,
                   basic_stepper=basic_step,
                   training_stepper=training_step,
-                  lr_scheduler = None):
+                  lr_scheduler = None,
+                  ittr_limit = None,
+                  data_log_dict = {},
+                  direct_use_dl = False,
+                  fp16 = False): # implement last two params in optimize as well; make sure dl is iter in basic info loop not enum
 
     losses = []
-    bar = utils.tqdm(range(epochs))
+    bar = utils.tqdm(range(epochs)) if epochs > 1 else [0]
+    model.train()
+
+    if fp16:
+        model, optimizer = amp.initialize(model, optimizer)
 
     for _ in bar:
-        for i, data in enumerate(dl):
+        dl = dl if direct_use_dl and epochs == 1 else iter(dl)
+
+        for data in dl:
             if lr_scheduler is not None:
                 lr_scheduler.step()
             
-            cost, _, _, _ = basic_stepper(model, data, loss, feed_target)
-            training_stepper(cost, optimizer)
+            cost, _, _, _ = basic_stepper(model, data, loss, feed_target, data_log_dict)
+            training_stepper(cost, optimizer, fp16)
 
             losses.append(cost.item())
 
-    return losses
+            if ittr_limit is not None and len(losses) >= ittr_limit:
+                return False, losses, dl
+
+    return True, losses, None
 
 def optimize(epochs: int, model: torch.nn.Module, optimizer: torch.optim.Optimizer,
              loss: LossCall,
@@ -76,11 +138,16 @@ def optimize(epochs: int, model: torch.nn.Module, optimizer: torch.optim.Optimiz
              ittr_limit: int = None,
              lr_scheduler = None,
              epoch_save_path: str = None,
-             basic_stepper = basic_step):
+             basic_stepper = basic_step,
+             fp16 = False):
 
     epoch_ittr = utils.tqdm(range(epochs))
     data = {"train": [], "test": []}
-    
+    model.train()
+
+    if fp16:
+        model, optimizer = amp.initialize(model, optimizer)
+
     for epoch in epoch_ittr:
         epoch_ittr.write("\nEpoch: " + str(epoch))
         
@@ -90,21 +157,28 @@ def optimize(epochs: int, model: torch.nn.Module, optimizer: torch.optim.Optimiz
         train_data = train(model, optimizer, loss, train_dl, feed_target,
                            callback=step_callback, stepper=training_stepper, 
                            basic_stepper=basic_stepper, ittr_limit=ittr_limit, 
-                           lr_scheduler=lr_scheduler)
+                           lr_scheduler=lr_scheduler, fp16=fp16)
+
+        if epoch_save_path is not None:
+            torch.save(model.state_dict(), f"{epoch_save_path}_{str(epoch)}_model.pt")
+        
         eval_data = None
 
         if valid_dl is not None:
             eval_data = evaluate(model, loss, valid_dl, batch_dim=batch_dim, 
-                                 callback=step_callback, basic_stepper=basic_stepper)
+                                 callback=step_callback, basic_stepper=basic_stepper,
+                                 store_pt=metric is not None)
        
+            if metric is not None:
+                eval_data["metric"] = metric(eval_data['pred'], eval_data['target'])
+
         if print_results:
-            print_info(epoch_ittr.write, train_data, eval_data, metric)
+            print_info(epoch_ittr.write, train_data, eval_data)
 
         data["train"] += [train_data]
         data["test"] += [eval_data]
-        
+
         if epoch_save_path is not None:
-            torch.save(model.state_dict(), f"{epoch_save_path}_{str(epoch)}_model.pt")
             torch.save({"train": train_data, "test": eval_data}, f"{epoch_save_path}_{str(epoch)}_data.pt")
             
     return data
@@ -112,8 +186,7 @@ def optimize(epochs: int, model: torch.nn.Module, optimizer: torch.optim.Optimiz
 
 def print_info(write_fn: Callable[[str], None],
                train_data: Dict[str, Any] = None,
-               eval_data: Dict[str, Any] = None,
-               metric: MetricCall = None):
+               eval_data: Dict[str, Any] = None):
 
     if train_data is not None:
         cost = train_data['cost']
@@ -124,13 +197,13 @@ def print_info(write_fn: Callable[[str], None],
     if eval_data is not None:
         write_fn("Test Cost: " + str(eval_data["cost"]))
 
-    if metric is not None:
-        write_fn("Metric: " + str(metric(eval_data['pred'], eval_data['target'])))
+    if eval_data is not None and "metric" in eval_data:
+        write_fn("Metric: " + str(eval_data["metric"]))
 
 
 def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, loss: LossCall,
           train_dl: DataLoader, feed_target: bool = False, callback: StepCallback = None, 
-          stepper=training_step, basic_stepper=basic_step, ittr_limit: int = None, lr_scheduler = None):
+          stepper=training_step, basic_stepper=basic_step, ittr_limit: int = None, lr_scheduler = None, fp16 = False):
 
     if lr_scheduler is not None:
         data = {'cost': [], 'lrs': []}
@@ -141,12 +214,12 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, loss: LossCa
         if callback is not None:
             callback(i, steps, bar, model, x, y, pred, cost)
         
-        data['cost'].append(cost.item())
+        data['cost'].append(cost.cpu().detach().item())
         
         if lr_scheduler is not None:
             data['lrs'].append(optimizer.state_dict()["param_groups"][0]["lr"])
 
-        stepper(cost, optimizer)
+        stepper(cost, optimizer, fp16=fp16)
 
     basic_info_loop(model, loss, train_dl, step, feed_target=feed_target, stepper=basic_stepper, ittr_limit=ittr_limit, lr_scheduler=lr_scheduler)
         
@@ -155,7 +228,7 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, loss: LossCa
 
 @prediction.eval
 def evaluate(model: torch.nn.Module, loss: LossCall, valid_dl: DataLoader, batch_dim: int = 0,
-             callback: StepCallback = None, basic_stepper=basic_step):
+        callback: StepCallback = None, basic_stepper=basic_step, store_pt:bool = True):
 
     data = {'cost': 0, 'pred': [], 'target': []}
     
@@ -163,15 +236,19 @@ def evaluate(model: torch.nn.Module, loss: LossCall, valid_dl: DataLoader, batch
         if callback is not None:
             callback(i, steps, bar, model, x, y, pred, cost)
         
-        data['cost'] += cost.item()
-        data['pred'].append(pred.cpu())
-        data['target'].append(y.cpu())
+        data['cost'] += cost.cpu().detach().item()
+
+        if store_pt:
+            data['pred'].append(pred.cpu().detach())
+            data['target'].append(y.cpu().detach())
 
     basic_info_loop(model, loss, valid_dl, step, stepper=basic_stepper)
     
     data["cost"] /= len(valid_dl)
-    data['pred'] = torch.cat(data['pred'], dim=batch_dim)
-    data['target'] = torch.cat(data['target'], dim=batch_dim)
+    
+    if store_pt:
+        data['pred'] = torch.cat(data['pred'], dim=batch_dim)
+        data['target'] = torch.cat(data['target'], dim=batch_dim)
 
     return data
 
@@ -191,7 +268,7 @@ def basic_info_loop(model: torch.nn.Module,
 
     if ittr_limit is not None:
         steps = min(steps, ittr_limit)
-    
+     
     if steps < 10:
         exp_cost_factor = 1
     else:
@@ -201,6 +278,7 @@ def basic_info_loop(model: torch.nn.Module,
     exp_weighted_cost = 0 
     
     bar = utils.tqdm(enumerate(dl), total=steps)
+    model.train()
 
     for i, data in bar:
         if lr_scheduler is not None:

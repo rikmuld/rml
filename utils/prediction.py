@@ -46,13 +46,21 @@ def predict_many(model: torch.nn.Module, inp: Any, bs: int = -1, batch_dim: int 
     return torch.cat(res, dim=batch_dim)
 
 @eval
-def predict_dl(model: torch.nn.Module, dl: torch.utils.data.DataLoader, to_device_fn=to_device) -> (torch.FloatTensor, Any):
+def predict_dl(model: torch.nn.Module, dl: torch.utils.data.DataLoader, to_device_fn=to_device, loss_fn=None) -> (torch.FloatTensor, Any):
     pred, targ = [], []
-    
+    losses = []
+
     for batch in tqdm(dl):
         inp, target = batch
-                
-        pred.append(model(*to_device_fn(inp)))
-        targ.append(target)
-        
-    return torch.cat(pred), torch.cat(targ)
+        out = model(*to_device_fn(inp))
+
+        if loss_fn is None:
+            pred.append(out)
+            targ.append(target)
+        else:
+            losses.append(loss_fn(out, *to_device_fn(target)))
+
+    if loss_fn is None:
+        return torch.cat(pred), torch.cat(targ)
+    else:
+        return losses
