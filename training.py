@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from .utils import prediction, utils
 from typing import Callable, Any, Dict, Tuple
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import _LRScheduler
 from tqdm import tqdm
 
 try:
@@ -60,7 +61,7 @@ class OptimParams:
     dl_valid: DataLoader = None
     metric: MetricCall = None
     ittr_limit: int = None
-    lr_scheduler = None
+    lr_scheduler: _LRScheduler = None
     feed_target: bool = False
     batch_dim: int = 0
     bare_train_feedback: bool = False
@@ -76,15 +77,15 @@ def optimize_with_params(params: OptimParams, basic_stepper = basic_step, traini
             params.epochs, params.model, params.optimizer, params.loss,
             params.dl_train, params.feed_target, basic_stepper, 
             training_stepper, params.lr_scheduler, params.ittr_limit, 
-            params.data_log_dict, params.direct_use_dl, params.fp16)
+            params.data_log_dict, params.direct_use_dl, params.fp_16)
 
     else:
         return optimize(
             params.epochs, params.model, params.optimizer, params.loss,
-            params.train_dl, params.valid_dl, params.metric, params.feed_target,
+            params.dl_train, params.dl_valid, params.metric, params.feed_target,
             epoch_callback, step_callback, params.print_result,
             params.batch_dim, training_stepper, params.ittr_limit, params.lr_scheduler,
-            params.epoch_save_path, basic_stepper, params.fp16)
+            params.epoch_save_path, basic_stepper, params.fp_16)
 
 def optimize_bare(epochs: int,
                   model: torch.nn.Module,
@@ -161,6 +162,7 @@ def optimize(epochs: int, model: torch.nn.Module, optimizer: torch.optim.Optimiz
 
         if epoch_save_path is not None:
             torch.save(model.state_dict(), f"{epoch_save_path}_{str(epoch)}_model.pt")
+            torch.save(optimizer.state_dict(), f"{epoch_save_path}_{str(epoch)}_optim.pt")
         
         eval_data = None
 
@@ -171,6 +173,9 @@ def optimize(epochs: int, model: torch.nn.Module, optimizer: torch.optim.Optimiz
        
             if metric is not None:
                 eval_data["metric"] = metric(eval_data['pred'], eval_data['target'])
+                
+                del eval_data['pred']
+                del eval_data['target']
 
         if print_results:
             print_info(epoch_ittr.write, train_data, eval_data)
@@ -221,7 +226,10 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, loss: LossCa
 
         stepper(cost, optimizer, fp16=fp16)
 
-    basic_info_loop(model, loss, train_dl, step, feed_target=feed_target, stepper=basic_stepper, ittr_limit=ittr_limit, lr_scheduler=lr_scheduler)
+        if lr_scheduler is not None:
+            lr_scheduler.step()
+
+    basic_info_loop(model, loss, train_dl, step, feed_target=feed_target, stepper=basic_stepper, ittr_limit=ittr_limit)
         
     return data
 
@@ -261,8 +269,7 @@ def basic_info_loop(model: torch.nn.Module,
                                     int, int, tqdm, torch.nn.Module], None],
                     feed_target: bool = False,
                     stepper=basic_step,
-                    ittr_limit=None,
-                    lr_scheduler=None):
+                    ittr_limit=None):
 
     steps = len(dl)
 
@@ -278,12 +285,8 @@ def basic_info_loop(model: torch.nn.Module,
     exp_weighted_cost = 0 
     
     bar = utils.tqdm(enumerate(dl), total=steps)
-    model.train()
 
     for i, data in bar:
-        if lr_scheduler is not None:
-            lr_scheduler.step()
-            
         cost, input, target, pred = stepper(model, data, loss, feed_target)
 
         exp_weighted_cost = (1 - exp_cost_factor) * exp_weighted_cost + exp_cost_factor * cost.item()
@@ -335,3 +338,4 @@ def lr_range(dl, model, loss, optim_fn, mn: float = 1e-6, mx: float = 1, linear:
         lr_scheduler=schedual,
         **kwargs
     )
+
