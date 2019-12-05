@@ -163,7 +163,10 @@ def optimize(epochs: int, model: torch.nn.Module, optimizer: torch.optim.Optimiz
         if epoch_save_path is not None:
             torch.save(model.state_dict(), f"{epoch_save_path}_{str(epoch)}_model.pt")
             torch.save(optimizer.state_dict(), f"{epoch_save_path}_{str(epoch)}_optim.pt")
-        
+
+            if lr_scheduler is not None:
+                torch.save(lr_scheduler.state_dict(), f"{epoch_save_path}_{str(epoch)}_lrs.pt")
+
         eval_data = None
 
         if valid_dl is not None:
