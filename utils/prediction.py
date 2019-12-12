@@ -54,7 +54,7 @@ def predict_dl(model: torch.nn.Module, dl: torch.utils.data.DataLoader, to_devic
     for batch in tqdm(dl):
         data = batch
         
-        if type(data) is tuple:
+        if type(data) is tuple or type(data) is list:
             inp, target = data
         else:
             inp = data
