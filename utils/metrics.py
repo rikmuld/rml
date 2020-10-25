@@ -8,7 +8,7 @@ def accuracy(preds, target) -> float:
     return result.sum().item() / target.size(0)
 
 
-def accuracy_binary(preds, target, cutoff: float = 0.5, split_by_class=False) -> float:
+def accuracy_binary(preds, target, cutoff: float = 0.5, split_by_class=True) -> float:
     target = target.view(-1)
     preds = preds.clone().detach().view(-1)
     
