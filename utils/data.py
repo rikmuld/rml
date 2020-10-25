@@ -51,7 +51,7 @@ class SimpleDS:
     
     def __getitem__(self, idx: int):
         return self.transform(self.x[idx]), self.transform_y(self.y[idx])
-    
+
 
 class ImageTask(Dataset):
     def __init__(self, root, images, ext, transform):
@@ -84,7 +84,6 @@ class ImageTaskWT(ImageTask):
         
         return x, y
     
-
 def build_balanced_sampler(labels, dataset_size=None):
     if dataset_size is None:
         dataset_size = len(labels)

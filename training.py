@@ -39,7 +39,7 @@ def basic_step(model: torch.nn.Module, data: Tuple[torch.FloatTensor, Any], loss
     return cost, input, target, pred
 
 
-def training_step(cost: torch.FloatTensor, optimizer: torch.optim.Optimizer, fp16: bool = False):
+def training_step(cost: torch.FloatTensor, optimizer: torch.optim.Optimizer, fp16: bool = False, lr_scheduler = None):
     optimizer.zero_grad()
 
     if fp16:
@@ -49,6 +49,9 @@ def training_step(cost: torch.FloatTensor, optimizer: torch.optim.Optimizer, fp1
         cost.backward()
     
     optimizer.step()
+
+    if lr_scheduler is not None:
+        lr_scheduler.step()
 
 
 @dataclass
@@ -112,11 +115,8 @@ def optimize_bare(epochs: int,
         dl = dl if direct_use_dl and epochs == 1 else iter(dl)
 
         for data in dl:
-            if lr_scheduler is not None:
-                lr_scheduler.step()
-            
             cost, _, _, _ = basic_stepper(model, data, loss, feed_target, data_log_dict)
-            training_stepper(cost, optimizer, fp16)
+            training_stepper(cost, optimizer, fp16, lr_scheduler)
 
             losses.append(cost.item())
 
@@ -227,10 +227,7 @@ def train(model: torch.nn.Module, optimizer: torch.optim.Optimizer, loss: LossCa
         if lr_scheduler is not None:
             data['lrs'].append(optimizer.state_dict()["param_groups"][0]["lr"])
 
-        stepper(cost, optimizer, fp16=fp16)
-
-        if lr_scheduler is not None:
-            lr_scheduler.step()
+        stepper(cost, optimizer, fp16=fp16, lr_scheduler=lr_scheduler)
 
     basic_info_loop(model, loss, train_dl, step, feed_target=feed_target, stepper=basic_stepper, ittr_limit=ittr_limit)
         
