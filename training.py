@@ -162,7 +162,11 @@ def optimize(epochs: int, model: torch.nn.Module, optimizer: torch.optim.Optimiz
 
         if epoch_save_path is not None:
             torch.save(model.state_dict(), f"{epoch_save_path}_{str(epoch)}_model.pt")
-        
+            torch.save(optimizer.state_dict(), f"{epoch_save_path}_{str(epoch)}_optim.pt")
+
+            if lr_scheduler is not None:
+                torch.save(lr_scheduler.state_dict(), f"{epoch_save_path}_{str(epoch)}_lrs.pt")
+
         eval_data = None
 
         if valid_dl is not None:
@@ -173,8 +177,8 @@ def optimize(epochs: int, model: torch.nn.Module, optimizer: torch.optim.Optimiz
             if metric is not None:
                 eval_data["metric"] = metric(eval_data['pred'], eval_data['target'])
                 
-                #del eval_data['pred']
-                #del eval_data['target']
+                del eval_data['pred']
+                del eval_data['target']
 
         if print_results:
             print_info(epoch_ittr.write, train_data, eval_data)
@@ -334,3 +338,4 @@ def lr_range(dl, model, loss, optim_fn, mn: float = 1e-6, mx: float = 1, linear:
         lr_scheduler=schedual,
         **kwargs
     )
+

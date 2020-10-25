@@ -42,7 +42,6 @@ class PreLoader:
 class SimpleDS:
     def __init__(self, x, y, transform = unit, transform_y = unit):
         self.x = x
-        self.y = y
         self.transform = transform
         self.transform_y = transform_y
         
@@ -51,6 +50,12 @@ class SimpleDS:
     
     def __getitem__(self, idx: int):
         return self.transform(self.x[idx]), self.transform_y(self.y[idx])
+    
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        return self.get_item_fn(idx)
     
 
 class ImageTask(Dataset):

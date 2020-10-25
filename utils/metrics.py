@@ -10,8 +10,8 @@ def accuracy(preds, target) -> float:
 
 def accuracy_binary(preds, target, cutoff: float = 0.5, split_by_class=False) -> float:
     target = target.view(-1)
-
-    preds = torch.tensor(preds.view(-1))
+    preds = preds.clone().detach().view(-1)
+    
     preds[preds >= cutoff] = 1
     preds[preds < cutoff] = 0
     
@@ -27,7 +27,6 @@ def accuracy_binary(preds, target, cutoff: float = 0.5, split_by_class=False) ->
         res_1 = res_1.sum().item() / res_1.size(0)
 
         return (res_0, res_1)
-
 
 def precission_recall(preds: torch.FloatTensor, target: torch.LongTensor, cutoff: float = 0.5):
     true_pos = 0
